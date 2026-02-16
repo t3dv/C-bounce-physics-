@@ -1,0 +1,8 @@
+.idea/
+cmake-build-debug/
+cmake-build-release/
+ClionProjects/
+_deps/
+*.exe
+*.obj
+*.pdb
