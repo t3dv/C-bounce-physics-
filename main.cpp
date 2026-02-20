@@ -4,6 +4,8 @@
 #include <format>
 #include <random>
 
+#include "SFML/Audio/Listener.hpp"
+
 using namespace sf;
 
 struct PhysHUD {
@@ -25,10 +27,11 @@ struct PhysHUD {
 
 
 struct ballsInSim {
+    float REST_THRESHOLD = 15.f;
     CircleShape shape;
     Vector2f velocity;
-
-    ballsInSim(float  radius) : shape(radius), velocity(1.f, 1.f) {
+    bool isStatic = false;
+    ballsInSim(float  radius) : shape(radius), velocity(1.f, 1.f), isStatic(false) {
         shape.setFillColor(Color::Red);
 
         float x = static_cast<float>(rand() % 600 + 100);
@@ -36,18 +39,17 @@ struct ballsInSim {
         shape.setPosition({x,y});
     }
 
-    void update (float dt, float gravity, float jumpImpulse, float limX, float limY) {
-        if (velocity.y != 0 || shape.getPosition().y < limY) {
-            velocity.y += gravity * dt;
-            shape.move(velocity*dt);
-        }
+    void update (float dt, float gravity, float jumpImpulse, float limX, float limY) {// This function updates the ball
+        if (isStatic) return;
+        velocity.y += gravity * dt;
+        shape.move(velocity*dt);
 
-        if (shape.getPosition().y > limY-shape.getRadius()) {
-            shape.setPosition({shape.getPosition().x, limY-shape.getRadius()});
+        if (shape.getPosition().y > limY-shape.getRadius()*2.f) {
+            shape.setPosition({shape.getPosition().x, limY-shape.getRadius()*2.f});
             velocity.y *= -jumpImpulse;
-            if (velocity.y < 15.f && velocity.y > -15.f) {
-                velocity.y = 0;
-                shape.setPosition({shape.getPosition().x, limY-20});
+            if (std::abs(velocity.y) < REST_THRESHOLD) { // Threshold for stopping the ball so it doesn't vibrate forever.
+                velocity = {0.f, 0.f};
+                isStatic = true;
                 shape.setFillColor(Color::Green);
             }
         }
@@ -62,7 +64,7 @@ struct ballsInSim {
     }
 };
 
-struct Node {
+struct Node { // linked list used intentionally to practice manual memory management
     ballsInSim balls;
     Node* next;
 
@@ -70,6 +72,7 @@ struct Node {
 };
 
 int main() {
+    float mass = 0;
     srand(time(NULL));
     unsigned int width = 500;
     unsigned int height = 500;
@@ -78,13 +81,12 @@ int main() {
     if (!font.openFromFile("Arial_Bold.ttf")) {
         std::cerr << "Failed to load font" << std::endl;
     }
-    // counters
+
     PhysHUD gui(font, width, height);
 
     int ballNum=0;
     Node* head = nullptr;
-    //constants
-    const float gravity = 980.f;
+    const float gravity = 980.f; // change to affect gravity, duuh
     const float jumpImpulse = 0.8;
     Clock clock;
 
@@ -94,11 +96,9 @@ int main() {
                 window.close();
             }
             if (const auto* mousePressed = event->getIf<Event::MouseButtonPressed>()) {
-
                 if (mousePressed->button == Mouse::Button::Left) {
                     Node* newNode = new Node(10.f);
-                    Vector2f mousePos = window.mapPixelToCoords(mousePressed->position);
-                    newNode->balls.shape.setPosition(mousePos);
+                    newNode->balls.shape.setPosition(window.mapPixelToCoords(mousePressed->position));
                     newNode->next = head;
                     head = newNode;
                     ballNum++;
@@ -106,13 +106,63 @@ int main() {
 
             }
         }
-        float dt = clock.restart().asSeconds();
+
+        float dt = clock.restart().asSeconds(); //constant time, not dependent on refresh rate
         if (dt > 0.1f) dt = 0.1f;
+
         Node* current = head;
         while (current != nullptr) {
             current->balls.update(dt, gravity, jumpImpulse, width, height);
             current = current->next;
         }
+
+        Node* i = head;
+        while (i != nullptr) {
+            float r = i->balls.shape.getRadius();
+            Node* j = i->next;
+            while (j != nullptr) {
+                Vector2f diff = i->balls.shape.getPosition() - j->balls.shape.getPosition();
+                float distSq = (diff.x * diff.x) + (diff.y * diff.y);
+                float minDist = r + r;
+                float minDistSq = minDist * minDist;
+
+                if (distSq < minDistSq) {
+                    float actualDist = std::sqrt(distSq);
+                    if (actualDist == 0.f) {
+                        i->balls.shape.move({0.1f, 0.1f});
+                        j = j->next;
+                        continue;
+                    }
+
+                    Vector2f normal = diff / actualDist;
+                    float overlap = minDist - actualDist;
+                    i->balls.shape.move(normal * (overlap * 0.5f));
+                    j->balls.shape.move(normal * (-overlap * 0.5f));
+
+                    Vector2f relativeVelocity = i->balls.velocity - j->balls.velocity;
+
+                    float velocityAlongNormal = (relativeVelocity.x * normal.x) + (relativeVelocity.y * normal.y);
+
+                    if (velocityAlongNormal < 0) {
+
+                        float restitution = 0.8f;
+
+                        float jImpulse = -(1.f + restitution) * velocityAlongNormal;// Had to look up the impulse formula simplified it for equal mass balls to keep the math manageable.
+                        jImpulse *= 0.5f;
+
+                        Vector2f impulse = jImpulse * normal;
+
+                        i->balls.velocity += impulse;
+                        j->balls.velocity -= impulse;
+                    }
+                }
+                j = j->next;
+            }
+            i = i->next;
+        }
+
+
+
         gui.update(ballNum, gravity,jumpImpulse);
 
         window.clear();
@@ -124,13 +174,10 @@ int main() {
         }
         window.display();
         }
-
         while (head != nullptr) {
             Node* temp = head;
             head = head->next;
             delete temp;
     }
-
-
         return 0;
 }
